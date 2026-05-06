@@ -464,7 +464,18 @@ input,select,textarea,button{font-family:'Montserrat',sans-serif;font-size:12px;
             1. Ve a <strong>console.firebase.google.com</strong> → Add project → <strong>crm-closer</strong><br>
             2. Firestore Database → Create → test mode<br>
             3. Project Settings → Web app → copia el objeto <strong>firebaseConfig</strong><br>
-            4. Abre el HTML → busca <strong>FIREBASE_CONFIG_HERE</strong> → pega tu config → sube a GitHub<br><br>
+            4. Tu Firebase ya está configurado en este archivo ✓<br><br>
+            <strong style="color:var(--amber);">⚠ Importante — Reglas de seguridad Firebase</strong><br>
+            Ve a Firebase Console → Firestore → Rules → reemplaza el contenido con:<br>
+            <div style="font-family:monospace;font-size:10px;background:var(--bg);border:1px solid var(--bord2);border-radius:var(--r);padding:10px;margin:8px 0;color:var(--text2);white-space:pre;">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /crm/{document} {
+      allow read, write: if true;
+    }
+  }
+}</div>
+            Clic <strong>Publish</strong>. Esto permite que tu equipo lea y escriba datos.<br><br>
             Con Firebase, cualquier cambio aparece en todos los dispositivos en menos de 1 segundo.
           </div>
         </div>
@@ -533,6 +544,82 @@ const PASSWORDS = {
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
+
+// ══════════════════════════════════════════
+// FIREBASE — SINCRONIZACIÓN EN TIEMPO REAL
+// Pega tu firebaseConfig aquí para activar
+// ══════════════════════════════════════════
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDSjnzQ-i-jE_9kXCmkLL_6rjO6Hb5MEXs",
+  authDomain: "crm-closer-56b8a.firebaseapp.com",
+  projectId: "crm-closer-56b8a",
+  storageBucket: "crm-closer-56b8a.firebasestorage.app",
+  messagingSenderId: "859219003840",
+  appId: "1:859219003840:web:d167651e84391b80792025",
+  measurementId: "G-PZ6NVWPFSV"
+};
+// Ejemplo — reemplaza null con tu config:
+// const FIREBASE_CONFIG = {
+//   apiKey: "AIza...",
+//   authDomain: "crm-closer.firebaseapp.com",
+//   projectId: "crm-closer",
+//   storageBucket: "crm-closer.appspot.com",
+//   messagingSenderId: "123456789",
+//   appId: "1:123:web:abc..."
+// };
+
+let fireDB = null;
+let fireUnsub = null;
+
+async function initFirebase() {
+  if (!FIREBASE_CONFIG) return;
+  try {
+    const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js');
+    const { getFirestore, doc, setDoc, onSnapshot, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const app = initializeApp(FIREBASE_CONFIG);
+    fireDB = { db: getFirestore(app), setDoc, doc, onSnapshot, getDoc };
+    // Listen for realtime changes
+    const docRef = fireDB.doc(fireDB.db, 'crm', 'shared');
+    fireUnsub = fireDB.onSnapshot(docRef, (snap) => {
+      if (!snap.exists()) return;
+      const remote = snap.data();
+      if (remote._updatedBy === getDeviceId()) return; // skip own writes
+      if (!remote.db) return;
+      db = remote.db;
+      if (!db.airbnb) db.airbnb = {deals:[],metas:{}};
+      if (!db.chino)  db.chino  = {deals:[],metas:{}};
+      localStorage.setItem('crm_db_v3', JSON.stringify(db));
+      refreshAll();
+      document.getElementById('sync-label').textContent = 'Sincronizado ↓ ' + new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+    });
+    document.getElementById('sync-dot').style.background = 'var(--blue)';
+    document.getElementById('sync-dot').style.animation = 'none';
+    document.getElementById('sync-label').textContent = 'Firebase conectado';
+    console.log('Firebase OK');
+  } catch(e) {
+    console.warn('Firebase error:', e.message);
+  }
+}
+
+async function saveToFirebase() {
+  if (!fireDB) return;
+  try {
+    await fireDB.setDoc(fireDB.doc(fireDB.db, 'crm', 'shared'), {
+      db,
+      _updatedBy: getDeviceId(),
+      _updatedAt: Date.now()
+    });
+  } catch(e) {
+    console.warn('Firebase save error:', e.message);
+  }
+}
+
+function getDeviceId() {
+  let id = localStorage.getItem('crm_device_id');
+  if (!id) { id = Math.random().toString(36).slice(2); localStorage.setItem('crm_device_id', id); }
+  return id;
+}
+
 // ══════════════════════════════════════════
 // PASSWORDS — edita aquí para cambiarlas
 // ══════════════════════════════════════════
@@ -604,6 +691,7 @@ function startApp(allowedProjects, role){
   // Set default project
   const startProj=allowedProjects[0];
   loadData();
+  initFirebase();
   setProject(startProj);
   document.getElementById('topbar-date').textContent=TODAY.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   setTimeout(initDashCharts,400);
@@ -630,7 +718,11 @@ function undoLast(){if(!undoStack.length)return;db=JSON.parse(undoStack.pop());i
 // ══════════════════════════════════════════
 // PERSIST
 // ══════════════════════════════════════════
-function saveData(){localStorage.setItem('crm_db_v3',JSON.stringify(db));document.getElementById('sync-label').textContent='Guardado '+new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});}
+function saveData(){
+  localStorage.setItem('crm_db_v3',JSON.stringify(db));
+  document.getElementById('sync-label').textContent='Guardado '+new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+  if(fireDB) saveToFirebase();
+}
 function loadData(){const r=localStorage.getItem('crm_db_v3');if(r){try{db=JSON.parse(r);}catch(e){}}if(!db.airbnb)db.airbnb={deals:[],metas:{}};if(!db.chino)db.chino={deals:[],metas:{}};}
 setInterval(saveData,90000);
 
@@ -681,6 +773,8 @@ function sw(name,btn){
 function dd(ds){if(!ds)return 9999;return Math.round((new Date(ds)-TODAY)/864e5);}
 function fmtDate(ds){if(!ds)return'—';return new Date(ds).toLocaleDateString('es-MX',{day:'numeric',month:'short',year:'numeric'});}
 function fmtMoney(n){return '$'+Math.round(n||0).toLocaleString('es-MX');}
+function fmtCurrency(n,moneda){const m=moneda||'USD';return '$'+Math.round(n||0).toLocaleString('es-MX')+' '+m;}
+function splitByCur(cuotas){return{usd:cuotas.filter(c=>(!c.moneda||c.moneda==='USD')),mxn:cuotas.filter(c=>c.moneda==='MXN')};}
 function cuotaStatus(c){if(c.paid)return{cls:'b-paid',txt:'Pagado'};const d=dd(c.date);if(d<0)return{cls:'b-due',txt:`Vencida ${Math.abs(d)}d`};if(d<=3)return{cls:'b-soon',txt:`Vence ${d===0?'hoy':`en ${d}d`}`};return{cls:'b-pend',txt:'Pendiente'};}
 function nextUnpaid(deal){return deal.cuotas.find(c=>!c.paid)||null;}
 function todayISO(){return TODAY.toISOString().slice(0,10);}
@@ -695,13 +789,19 @@ function renderDashboard(){
   const all=D.filter(d=>['ganado','perdido'].includes(d.stage)).length;
   const pct=all?Math.round(closed/all*100):0;
   const rev=D.filter(d=>d.stage==='ganado').reduce((s,d)=>s+d.valor,0);
+  const revUSD=D.filter(d=>d.stage==='ganado'&&(d.valorMoneda||'USD')==='USD').reduce((s,d)=>s+d.valor,0);
+  const revMXN=D.filter(d=>d.stage==='ganado'&&d.valorMoneda==='MXN').reduce((s,d)=>s+d.valor,0);
   const com=D.filter(d=>d.stage==='ganado').reduce((s,d)=>s+d.valor*d.comision/100,0);
   let venc=0;D.forEach(d=>d.cuotas.forEach(c=>{if(!c.paid&&dd(c.date)<0)venc++;}));
   const aov=closed?Math.round(rev/closed):0;
+  const aovUSD=D.filter(d=>d.stage==='ganado'&&(!d.valorMoneda||d.valorMoneda==='USD')).length?Math.round(revUSD/D.filter(d=>d.stage==='ganado'&&(!d.valorMoneda||d.valorMoneda==='USD')).length):0;
+  const aovMXN=D.filter(d=>d.stage==='ganado'&&d.valorMoneda==='MXN').length?Math.round(revMXN/D.filter(d=>d.stage==='ganado'&&d.valorMoneda==='MXN').length):0;
+  const isChino=currentProject==='chino';
   document.getElementById('kpi-grid').innerHTML=`
     <div class="kpi kpi-green"><div class="kpi-bar"></div><div class="kpi-label">% Cierre</div><div class="kpi-value">${pct}%</div><div class="kpi-sub">${closed}/${all} calls</div></div>
-    <div class="kpi kpi-blue"><div class="kpi-bar"></div><div class="kpi-label">AOV</div><div class="kpi-value">${aov?fmtMoney(aov):'—'}</div><div class="kpi-sub">ticket promedio</div></div>
-    <div class="kpi kpi-acc"><div class="kpi-bar"></div><div class="kpi-label">Revenue</div><div class="kpi-value">${fmtMoney(rev)}</div><div class="kpi-sub">total cerrado</div></div>
+    ${isChino?`<div class="kpi kpi-blue"><div class="kpi-bar"></div><div class="kpi-label">AOV USD</div><div class="kpi-value">${aovUSD?fmtMoney(aovUSD):'—'}</div><div class="kpi-sub">ticket USD</div></div><div class="kpi kpi-blue"><div class="kpi-bar"></div><div class="kpi-label">AOV MXN</div><div class="kpi-value">${aovMXN?fmtMoney(aovMXN):'—'}</div><div class="kpi-sub">ticket MXN</div></div>`:`<div class="kpi kpi-blue"><div class="kpi-bar"></div><div class="kpi-label">AOV</div><div class="kpi-value">${aov?fmtMoney(aov):'—'}</div><div class="kpi-sub">ticket promedio</div></div>`}
+    ${isChino?`<div class="kpi kpi-acc"><div class="kpi-bar"></div><div class="kpi-label">Revenue USD</div><div class="kpi-value">${fmtMoney(revUSD)}</div><div class="kpi-sub">cerrado USD</div></div><div class="kpi kpi-blue"><div class="kpi-bar"></div><div class="kpi-label">Revenue MXN</div><div class="kpi-value">${fmtMoney(revMXN)}</div><div class="kpi-sub">cerrado MXN</div></div>`:`<div class="kpi kpi-acc"><div class="kpi-bar"></div><div class="kpi-label">Revenue</div><div class="kpi-value">${fmtMoney(rev)}</div><div class="kpi-sub">total cerrado</div></div>`}
+    ${isChino?`<div class="kpi kpi-green"><div class="kpi-bar"></div><div class="kpi-label">Cobrado USD</div><div class="kpi-value">${fmtMoney(dCobUSD+resUSD)}</div><div class="kpi-sub">incl. reservas</div></div><div class="kpi kpi-blue"><div class="kpi-bar"></div><div class="kpi-label">Cobrado MXN</div><div class="kpi-value">${fmtMoney(dCobMXN+resMXN)}</div><div class="kpi-sub">incl. reservas</div></div>`:`<div class="kpi kpi-green"><div class="kpi-bar"></div><div class="kpi-label">Cobrado</div><div class="kpi-value">${fmtMoney(cob)}</div><div class="kpi-sub">este ciclo</div></div>`}
     <div class="kpi kpi-green"><div class="kpi-bar"></div><div class="kpi-label">Comisión</div><div class="kpi-value">${fmtMoney(com)}</div><div class="kpi-sub">estimada</div></div>
     <div class="kpi kpi-amber"><div class="kpi-bar"></div><div class="kpi-label">Upgrades</div><div class="kpi-value">${D.filter(d=>d.stage==='upgrade').length}</div><div class="kpi-sub">en pipeline</div></div>
     <div class="kpi kpi-red"><div class="kpi-bar"></div><div class="kpi-label">Vencidas</div><div class="kpi-value">${venc}</div><div class="kpi-sub">urgente</div></div>
@@ -721,8 +821,14 @@ function initDashCharts(){
   const D=deals();
   const cnts=STAGES.slice(0,6).map(s=>D.filter(d=>d.stage===s).length);
   const allC=[];D.forEach(d=>d.cuotas.forEach(c=>allC.push(c)));
-  const cob=allC.filter(c=>c.paid).reduce((s,c)=>s+c.amt,0);
-  const pen=allC.filter(c=>!c.paid).reduce((s,c)=>s+c.amt,0);
+  const dCobUSD=allC.filter(c=>c.paid&&(!c.moneda||c.moneda==='USD')).reduce((s,c)=>s+c.amt,0);
+  const dCobMXN=allC.filter(c=>c.paid&&c.moneda==='MXN').reduce((s,c)=>s+c.amt,0);
+  const dPenUSD=allC.filter(c=>!c.paid&&(!c.moneda||c.moneda==='USD')).reduce((s,c)=>s+c.amt,0);
+  const dPenMXN=allC.filter(c=>!c.paid&&c.moneda==='MXN').reduce((s,c)=>s+c.amt,0);
+  // Reserva/enganche counts as collected money
+  const resUSD=D.filter(d=>d.reserva>0&&(!d.valorMoneda||d.valorMoneda==='USD')&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
+  const resMXN=D.filter(d=>d.reserva>0&&d.valorMoneda==='MXN'&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
+  const cob=(dCobUSD+resUSD)+(dCobMXN+resMXN); const pen=dPenUSD+dPenMXN;
   new Chart(document.getElementById('pipeChart'),{type:'bar',data:{labels:['Lead','Call','Reserva','Cierre','Seg.','Upgrade'],datasets:[{data:cnts,backgroundColor:['#60A8F030','#5DCBA030','#A060F030','#FFB54730','#C8F06030','#FFB54740'],borderColor:['#60A8F0','#5DCBA0','#A060F0','#FFB547','#C8F060','#FFB547'],borderWidth:1.5,borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{color:'#56555C',stepSize:1,font:{family:'Montserrat',size:10}},grid:{color:'rgba(255,255,255,0.04)'}},x:{ticks:{color:'#56555C',font:{family:'Montserrat',size:10}},grid:{display:false}}}}});
   new Chart(document.getElementById('cobrosChart'),{type:'doughnut',data:{labels:['Cobrado','Por cobrar'],datasets:[{data:[cob,pen],backgroundColor:['rgba(93,203,160,.7)','rgba(255,255,255,.06)'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{display:true,position:'bottom',labels:{color:'#9998A0',font:{family:'Montserrat',size:10}}}}}});
 }
@@ -732,7 +838,7 @@ function initDashCharts(){
 // ══════════════════════════════════════════
 function cardHTML(deal){
   const next=nextUnpaid(deal);let alertH='';
-  if(next){const d=dd(next.date);if(d<0)alertH=`<div class="k-alert red">⚠ Cuota vencida ${Math.abs(d)}d</div>`;else if(d<=3)alertH=`<div class="k-alert amber">⚡ Vence en ${d}d</div>`;}
+  if(next){const d=dd(next.date);const mLbl=next.moneda||'USD';if(d<0)alertH=`<div class="k-alert red">⚠ Vencida ${Math.abs(d)}d · ${fmtCurrency(next.amt,mLbl)}</div>`;else if(d<=3)alertH=`<div class="k-alert amber">⚡ ${fmtCurrency(next.amt,mLbl)} vence en ${d}d</div>`;}
   const tags=[];
   if(deal.producto)tags.push(`<span class="tag t-prod">${deal.producto}</span>`);
   if(deal.type==='cuota')tags.push('<span class="tag t-cuota">Cuotas</span>');
@@ -746,7 +852,7 @@ function cardHTML(deal){
     <div class="k-card-prod">${deal.producto||'—'}</div>
     ${deal.callDate?`<div class="k-card-date">📅 ${fmtDate(deal.callDate)}</div>`:''}
     ${deal.callMeet?`<a class="k-card-meet" href="${deal.callMeet}" target="_blank" onclick="event.stopPropagation()">🔗 Meet</a>`:''}
-    <div class="k-card-val">${fmtMoney(deal.valor)}</div>
+    <div class="k-card-val">${fmtCurrency(deal.valor, deal.valorMoneda||"USD")}</div>
     <div class="tags">${tags.join('')}</div>${alertH}
   </div>`;
 }
@@ -778,11 +884,25 @@ function renderCobros(){
     if(sf){const d=dd(c.date);if(sf==='due'&&(c.paid||d>=0))return false;if(sf==='soon'&&(c.paid||d<0||d>3))return false;if(sf==='pend'&&(c.paid||d<0||d<=3))return false;if(sf==='paid'&&!c.paid)return false;}
     return true;
   });
-  const cob=all.filter(c=>c.paid).reduce((s,c)=>s+c.amt,0);
-  const pen=all.filter(c=>!c.paid).reduce((s,c)=>s+c.amt,0);
+  const rCobUSD=all.filter(c=>c.paid&&(!c.moneda||c.moneda==='USD')).reduce((s,c)=>s+c.amt,0);
+  const rCobMXN=all.filter(c=>c.paid&&c.moneda==='MXN').reduce((s,c)=>s+c.amt,0);
+  const rPenUSD=all.filter(c=>!c.paid&&(!c.moneda||c.moneda==='USD')).reduce((s,c)=>s+c.amt,0);
+  const rPenMXN=all.filter(c=>!c.paid&&c.moneda==='MXN').reduce((s,c)=>s+c.amt,0);
+  // Reserva as cobrado (if not already captured in cuota #1)
+  const rResUSD=D.filter(d=>d.reserva>0&&(!d.valorMoneda||d.valorMoneda==='USD')&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
+  const rResMXN=D.filter(d=>d.reserva>0&&d.valorMoneda==='MXN'&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
+  const cob=(rCobUSD+rResUSD)+(rCobMXN+rResMXN); const pen=rPenUSD+rPenMXN;
   const com=D.reduce((s,d)=>s+d.cuotas.filter(c=>c.paid).reduce((ss,c)=>ss+c.amt,0)*d.comision/100,0);
   const venc=all.filter(c=>!c.paid&&dd(c.date)<0).length;
-  document.getElementById('cobros-kpis').innerHTML=`
+  const isChinoCob=currentProject==='chino';
+  document.getElementById('cobros-kpis').innerHTML=isChinoCob?`
+    <div class="kpi kpi-green"><div class="kpi-bar"></div><div class="kpi-label">Cobrado USD</div><div class="kpi-value">${fmtMoney(rCobUSD+rResUSD)}</div><div class="kpi-sub">incl. reservas</div></div>
+    <div class="kpi kpi-blue"><div class="kpi-bar"></div><div class="kpi-label">Cobrado MXN</div><div class="kpi-value">${fmtMoney(rCobMXN+rResMXN)}</div><div class="kpi-sub">incl. reservas</div></div>
+    <div class="kpi kpi-amber"><div class="kpi-bar"></div><div class="kpi-label">Pendiente USD</div><div class="kpi-value">${fmtMoney(rPenUSD)}</div><div class="kpi-sub">dólares</div></div>
+    <div class="kpi kpi-amber"><div class="kpi-bar"></div><div class="kpi-label">Pendiente MXN</div><div class="kpi-value">${fmtMoney(rPenMXN)}</div><div class="kpi-sub">pesos</div></div>
+    <div class="kpi kpi-acc"><div class="kpi-bar"></div><div class="kpi-label">Tu comisión</div><div class="kpi-value">${fmtMoney(com)}</div></div>
+    <div class="kpi kpi-red"><div class="kpi-bar"></div><div class="kpi-label">Vencidas</div><div class="kpi-value">${venc}</div></div>
+  `:`
     <div class="kpi kpi-green"><div class="kpi-bar"></div><div class="kpi-label">Cobrado</div><div class="kpi-value">${fmtMoney(cob)}</div></div>
     <div class="kpi kpi-amber"><div class="kpi-bar"></div><div class="kpi-label">Por cobrar</div><div class="kpi-value">${fmtMoney(pen)}</div></div>
     <div class="kpi kpi-acc"><div class="kpi-bar"></div><div class="kpi-label">Tu comisión</div><div class="kpi-value">${fmtMoney(com)}</div></div>
@@ -796,7 +916,7 @@ function renderCobros(){
       <td>${c.deal.producto?`<span class="tag t-prod">${c.deal.producto}</span>`:'—'}</td>
       <td>${c.deal.plataforma?`<span class="tag t-plat">${PL[c.deal.plataforma]}</span>`:'—'}</td>
       <td style="color:var(--text3);">#${c.num}</td><td>${fmtDate(c.date)}</td>
-      <td><strong>${fmtMoney(c.amt)}</strong></td>
+      <td><strong>${fmtCurrency(c.amt,c.moneda||'USD')}</strong></td>
       <td><span class="badge ${st.cls}">${st.txt}</span></td>
       <td>${meetBtn}</td>
       <td>${!c.paid?`<button onclick="event.stopPropagation();markPaid(${c.deal.id},${c.num})" class="btn btn-ghost btn-xs">Pagado ✓</button>`:''}</td>
@@ -842,7 +962,7 @@ function renderRecordatorios(){
 
   document.getElementById('wa-list').innerHTML=urgent.length?urgent.map(a=>{
     const first=a.deal.name.split(' ')[0];
-    const msg=a.d<0?`Hola ${first} 👋, te escribo porque tu cuota #${a.cuota.num} de ${fmtMoney(a.cuota.amt)} venció hace ${Math.abs(a.d)} días (${fmtDate(a.cuota.date)}). ¿Podemos coordinar el pago hoy?`:`Hola ${first} 👋, te recuerdo que tu cuota #${a.cuota.num} de ${fmtMoney(a.cuota.amt)} vence el ${fmtDate(a.cuota.date)}. Avísame si necesitas algo.`;
+    const msg=a.d<0?`Hola ${first} 👋, te escribo porque tu cuota #${a.cuota.num} de ${fmtCurrency(a.cuota.amt,a.cuota.moneda||'USD')} venció hace ${Math.abs(a.d)} días (${fmtDate(a.cuota.date)}). ¿Podemos coordinar el pago hoy?`:`Hola ${first} 👋, te recuerdo que tu cuota #${a.cuota.num} de ${fmtCurrency(a.cuota.amt,a.cuota.moneda||'USD')} vence el ${fmtDate(a.cuota.date)}. Avísame si necesitas algo.`;
     return`<div class="notif-item"><div class="ni-head"><span class="ni-name">${a.deal.name}</span><span class="badge ${a.d<0?'b-due':'b-soon'}">${a.d<0?`Vencida ${Math.abs(a.d)}d`:`En ${a.d}d`}</span></div><div class="ni-preview">${msg}</div><div class="ni-actions"><button class="btn btn-wa btn-sm" onclick="window.open('https://wa.me/${a.deal.phone||''}?text='+encodeURIComponent('${msg.replace(/'/g,"\\'")}'),'_blank')">Enviar</button><button class="btn-copy" onclick="navigator.clipboard.writeText('${msg.replace(/'/g,"\\'")}').then(()=>{this.textContent='Copiado ✓';setTimeout(()=>this.textContent='Copiar',2000)})">Copiar</button></div></div>`;
   }).join(''):'<div style="font-size:12px;color:var(--text3);padding:8px 0;">Sin cuotas urgentes en 5 días ✓</div>';
 
@@ -869,11 +989,17 @@ function saveMeta(field,val){const k=metaKey();if(!metas()[k])metas()[k]={};meta
 function renderMetas(){
   document.getElementById('month-label').textContent=`${MONTHS_ES[currentMonth]} ${currentYear}`;
   const k=metaKey();const m=metas()[k]||{};const D=deals();
-  const allC=[];D.forEach(d=>d.cuotas.forEach(c=>{const cd=new Date(c.date);if(c.paid&&cd.getMonth()===currentMonth&&cd.getFullYear()===currentYear)allC.push(c);}));
-  const cashActual=allC.reduce((s,c)=>s+c.amt,0);
+    const allCM=[];D.forEach(d=>d.cuotas.forEach(c=>{const cd=new Date(c.date);if(c.paid&&cd.getMonth()===currentMonth&&cd.getFullYear()===currentYear)allCM.push(c);}));
+  // Include reservas created this month
+  const mResUSD=D.filter(d=>d.reserva>0&&(!d.valorMoneda||d.valorMoneda==='USD')&&d.callDate&&new Date(d.callDate).getMonth()===currentMonth&&new Date(d.callDate).getFullYear()===currentYear&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
+  const mResMXN=D.filter(d=>d.reserva>0&&d.valorMoneda==='MXN'&&d.callDate&&new Date(d.callDate).getMonth()===currentMonth&&new Date(d.callDate).getFullYear()===currentYear&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
+  const cashUSD=(allCM.filter(c=>!c.moneda||c.moneda==='USD').reduce((s,c)=>s+c.amt,0))+mResUSD;
+  const cashMXN=(allCM.filter(c=>c.moneda==='MXN').reduce((s,c)=>s+c.amt,0))+mResMXN;
+  const cashActual=cashUSD+cashMXN;
   const cashPct=m.cashMeta>0?Math.min(100,Math.round(cashActual/m.cashMeta*100)):0;
+  const isChinoRes=currentProject==='chino';
   document.getElementById('meta-grid').innerHTML=`
-    <div class="meta-card"><div class="meta-label">Meta Cash Collected</div><input class="meta-inp" type="number" value="${m.cashMeta||''}" placeholder="0" onchange="saveMeta('cashMeta',this.value)"><div style="font-size:11px;color:var(--text2);margin-top:7px;">Real: <strong style="color:var(--green);">${fmtMoney(cashActual)}</strong></div><div class="meta-progress"><div class="meta-bar" style="width:${cashPct}%"></div></div><div class="meta-pct">${cashPct}% de la meta</div></div>
+    <div class="meta-card"><div class="meta-label">Meta Cash Collected</div><input class="meta-inp" type="number" value="${m.cashMeta||''}" placeholder="0" onchange="saveMeta('cashMeta',this.value)"><div style="font-size:11px;color:var(--text2);margin-top:6px;">Real: <strong style="color:var(--green);">${fmtMoney(cashActual)}</strong></div>${isChinoRes?`<div style="font-size:10px;color:var(--text3);margin-top:3px;">${fmtMoney(cashUSD)} USD &nbsp;·&nbsp; ${fmtMoney(cashMXN)} MXN</div>`:''}<div class="meta-progress"><div class="meta-bar" style="width:${cashPct}%"></div></div><div class="meta-pct">${cashPct}% de la meta</div></div>
     <div class="meta-card"><div class="meta-label">Meta de Calls</div><input class="meta-inp" type="number" value="${m.callsMeta||''}" placeholder="0" onchange="saveMeta('callsMeta',this.value)"><div style="font-size:11px;color:var(--text2);margin-top:7px;">Real: <strong style="color:var(--blue);">${D.filter(d=>d.callDate&&new Date(d.callDate).getMonth()===currentMonth&&new Date(d.callDate).getFullYear()===currentYear).length}</strong></div></div>
     <div class="meta-card"><div class="meta-label">Meta de Cierres</div><input class="meta-inp" type="number" value="${m.cierreMeta||''}" placeholder="0" onchange="saveMeta('cierreMeta',this.value)"><div style="font-size:11px;color:var(--text2);margin-top:7px;">Real: <strong style="color:var(--accent);">${D.filter(d=>d.stage==='ganado').length}</strong></div></div>
     <div class="meta-card"><div class="meta-label">Notas del mes</div><textarea style="background:var(--bg3);border:1px solid var(--bord2);border-radius:var(--r);padding:8px 10px;color:var(--text);width:100%;resize:vertical;min-height:80px;line-height:1.6;" placeholder="Contexto, bloqueos..." onchange="saveMeta('nota',this.value)">${m.nota||''}</textarea></div>
@@ -882,7 +1008,9 @@ function renderMetas(){
 function initResultCharts(){
   ['cashChart','origenChart','cierreChart','comChart'].forEach(id=>{const c=Chart.getChart(id);if(c)c.destroy();});
   const D=deals();const labels=[],cashData=[],metaData=[],cierreData=[],comData=[];
-  for(let i=5;i>=0;i--){let m=currentMonth-i,y=currentYear;if(m<0){m+=12;y--;}labels.push(`${MONTHS_ES[m].slice(0,3)} ${y}`);const k=`${y}-${String(m+1).padStart(2,'0')}`;const allC=[];D.forEach(d=>d.cuotas.forEach(c=>{const cd=new Date(c.date);if(c.paid&&cd.getMonth()===m&&cd.getFullYear()===y)allC.push({...c,comision:d.comision});}));cashData.push(allC.reduce((s,c)=>s+c.amt,0));metaData.push((metas()[k]||{}).cashMeta||0);cierreData.push(D.filter(d=>d.stage==='ganado'&&d.callDate&&new Date(d.callDate).getMonth()===m&&new Date(d.callDate).getFullYear()===y).length);comData.push(allC.reduce((s,c)=>s+c.amt*c.comision/100,0));}
+  for(let i=5;i>=0;i--){let m=currentMonth-i,y=currentYear;if(m<0){m+=12;y--;}labels.push(`${MONTHS_ES[m].slice(0,3)} ${y}`);const k=`${y}-${String(m+1).padStart(2,'0')}`;const allCi=[];D.forEach(d=>d.cuotas.forEach(c=>{const cd=new Date(c.date);if(c.paid&&cd.getMonth()===m&&cd.getFullYear()===y)allCi.push({...c,comision:d.comision});}));
+      const loopRes=D.filter(d=>d.reserva>0&&d.callDate&&new Date(d.callDate).getMonth()===m&&new Date(d.callDate).getFullYear()===y&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
+      cashData.push(allCi.reduce((s,c)=>s+c.amt,0)+loopRes);metaData.push((metas()[k]||{}).cashMeta||0);cierreData.push(D.filter(d=>d.stage==='ganado'&&d.callDate&&new Date(d.callDate).getMonth()===m&&new Date(d.callDate).getFullYear()===y).length);comData.push(allCi.reduce((s,c)=>s+c.amt*c.comision/100,0));}
   const origenCnts=ORIGENES.map(o=>D.filter(d=>d.origen===o).length);
   const baseOpts={responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9998A0',font:{family:'Montserrat',size:10}}}},scales:{y:{beginAtZero:true,ticks:{color:'#56555C',font:{family:'Montserrat',size:10}},grid:{color:'rgba(255,255,255,0.04)'}},x:{ticks:{color:'#56555C',font:{family:'Montserrat',size:10}},grid:{display:false}}}};
   new Chart(document.getElementById('cashChart'),{type:'bar',data:{labels,datasets:[{label:'Real',data:cashData,backgroundColor:'rgba(93,203,160,.5)',borderColor:'var(--green)',borderWidth:1.5,borderRadius:5},{label:'Meta',data:metaData,type:'line',borderColor:'rgba(200,240,96,.7)',borderWidth:2,pointRadius:4,tension:.3,fill:false}]},options:{...baseOpts}});
@@ -898,7 +1026,7 @@ function openFicha(id){
   const deal=deals().find(d=>d.id===id);if(!deal)return;
   editingId=id;
   document.getElementById('modal-title').textContent=deal.name||'Nuevo cliente';
-  const cuotasH=deal.cuotas.length?deal.cuotas.map(c=>{const st=cuotaStatus(c);return`<div class="cuota-item"><span class="ci-n">#${c.num}</span><span class="ci-date">${fmtDate(c.date)}</span><span class="ci-amt">${fmtMoney(c.amt)}</span><span class="badge ${st.cls}">${st.txt}</span>${!c.paid?`<button class="ci-mark" onclick="markPaid(${id},${c.num});openFicha(${id})">Pagado ✓</button>`:''}</div>`;}).join(''):'<div style="font-size:11px;color:var(--text3);padding:6px 0;">Sin cuotas</div>';
+  const cuotasH=deal.cuotas.length?deal.cuotas.map(c=>{const st=cuotaStatus(c);return`<div class="cuota-item"><span class="ci-n">#${c.num}</span><span class="ci-date">${fmtDate(c.date)}</span><span class="ci-amt">${fmtCurrency(c.amt,c.moneda||"USD")}</span><span class="badge ${st.cls}">${st.txt}</span>${!c.paid?`<button class="ci-mark" onclick="markPaid(${id},${c.num});openFicha(${id})">Pagado ✓</button>`:''}</div>`;}).join(''):'<div style="font-size:11px;color:var(--text3);padding:6px 0;">Sin cuotas</div>';
   const segH=[...deal.seguimientos].reverse().map(s=>`<div class="si"><div class="si-d">${fmtDate(s.date)}</div><div class="si-t">${s.texto}</div></div>`).join('')||'<div style="font-size:11px;color:var(--text3);">Sin seguimientos</div>';
   const platOpts=PLATS.map(p=>`<option value="${p}" ${deal.plataforma===p?'selected':''}>${PL[p]}</option>`).join('');
   const origenOpts=ORIGENES.map(o=>`<option value="${o}" ${deal.origen===o?'selected':''}>${o.charAt(0).toUpperCase()+o.slice(1)}</option>`).join('');
@@ -909,10 +1037,19 @@ function openFicha(id){
   document.getElementById('modal-body').innerHTML=`
     <div class="fg2"><div class="f"><label>Nombre completo</label><input id="f-name" value="${deal.name||''}"></div><div class="f"><label>Teléfono (WhatsApp)</label><input id="f-phone" value="${deal.phone||''}" placeholder="521XXXXXXXXXX"></div></div>
     <div class="fg2"><div class="f"><label>Email</label><input id="f-email" type="email" value="${deal.email||''}"></div><div class="f"><label>Producto</label><select id="f-producto">${productosOpts(deal.producto)}</select></div></div>
-    <div class="fg3"><div class="f"><label>Valor total (USD)</label><input id="f-valor" type="number" value="${deal.valor||0}"></div><div class="f"><label>Comisión %</label><input id="f-comision" type="number" value="${deal.comision||10}"></div><div class="f"><label>Reserva / Enganche</label><input id="f-reserva" type="number" value="${deal.reserva||0}"></div></div>
+    <div class="fg3">
+      <div class="f"><label>Valor total</label>
+        <div style="display:flex;gap:6px;">
+          <input id="f-valor" type="number" value="${deal.valor||0}" style="flex:1;">
+          ${currentProject==='chino'?`<select id="f-valor-moneda" style="background:var(--bg3);border:1px solid var(--bord2);border-radius:var(--r);padding:8px 9px;color:var(--text);cursor:pointer;"><option value="USD" ${(deal.valorMoneda||'USD')==='USD'?'selected':''}>USD</option><option value="MXN" ${deal.valorMoneda==='MXN'?'selected':''}>MXN</option></select>`:''}
+        </div>
+      </div>
+      <div class="f"><label>Comisión %</label><input id="f-comision" type="number" value="${deal.comision||10}"></div>
+      <div class="f"><label>Reserva / Enganche</label><input id="f-reserva" type="number" value="${deal.reserva||0}"></div>
+    </div>
     <div class="fg3"><div class="f"><label>Origen</label><select id="f-origen"><option value="">—</option>${origenOpts}</select></div><div class="f"><label>Plataforma de pago</label><select id="f-plataforma"><option value="">—</option>${platOpts}</select></div><div class="f"><label>Prioridad</label><select id="f-priority">${prioOpts}</select></div></div>
     <div class="fg3"><div class="f"><label>Etapa</label><select id="f-stage">${stageOpts}</select></div><div class="f"><label>Tipo de venta</label><select id="f-type">${typeOpts}</select></div><div class="f"><label>Fecha call / cierre</label><input id="f-calldate" type="date" value="${deal.callDate||''}"></div></div>
-    <div class="info-pill"><span>Comisión estimada</span><strong>${fmtMoney((deal.valor||0)*(deal.comision||10)/100)}</strong></div>
+    <div class="info-pill"><span>Valor: ${fmtCurrency(deal.valor||0, deal.valorMoneda||'USD')} &nbsp;·&nbsp; Comisión est.</span><strong>${fmtCurrency((deal.valor||0)*(deal.comision||10)/100, deal.valorMoneda||'USD')}</strong></div>
     <div class="fsect">📅 Google Meet</div>
     <div class="f fg1"><label>Link de llamada Google Meet</label><input id="f-meet" value="${deal.callMeet||''}" placeholder="https://meet.google.com/xxx-xxxx-xxx">${deal.callMeet?`<a href="${deal.callMeet}" target="_blank" style="font-size:11px;color:var(--meet);margin-top:4px;">Abrir Meet →</a>`:''}</div>
     <div class="fsect">📁 Drive / Archivos</div>
@@ -923,7 +1060,8 @@ function openFicha(id){
     ${cuotasH}
     <div style="display:flex;gap:8px;margin-top:9px;">
       <input id="new-cuota-date" type="date" style="flex:1;background:var(--bg3);border:1px solid var(--bord2);border-radius:var(--r);padding:7px 10px;color:var(--text);">
-      <input id="new-cuota-amt" type="number" placeholder="Monto USD" style="width:120px;background:var(--bg3);border:1px solid var(--bord2);border-radius:var(--r);padding:7px 10px;color:var(--text);">
+      <input id="new-cuota-amt" type="number" placeholder="Monto" style="width:100px;background:var(--bg3);border:1px solid var(--bord2);border-radius:var(--r);padding:7px 10px;color:var(--text);">
+      ${currentProject==='chino'?'<select id="new-cuota-moneda" style="background:var(--bg3);border:1px solid var(--bord2);border-radius:var(--r);padding:7px 9px;color:var(--text);cursor:pointer;"><option value=\"USD\">USD $</option><option value=\"MXN\">MXN $</option></select>':''}
       <button class="btn btn-ghost btn-sm" onclick="addCuota(${id})">+ Cuota</button>
     </div>
     <div class="fsect">🗒 Seguimientos</div>
@@ -937,12 +1075,12 @@ function openFicha(id){
 }
 
 function addSeg(id){const txt=document.getElementById('new-seg').value.trim();if(!txt)return;snapshot();deals().find(d=>d.id===id).seguimientos.push({date:todayISO(),texto:txt});saveData();openFicha(id);}
-function addCuota(id){const deal=deals().find(d=>d.id===id);const date=document.getElementById('new-cuota-date').value;const amt=parseFloat(document.getElementById('new-cuota-amt').value)||0;if(!date||!amt)return;snapshot();const num=(deal.cuotas.length?Math.max(...deal.cuotas.map(c=>c.num)):0)+1;deal.cuotas.push({num,date,amt,paid:false});saveData();openFicha(id);}
+function addCuota(id){const deal=deals().find(d=>d.id===id);const date=document.getElementById('new-cuota-date').value;const amt=parseFloat(document.getElementById('new-cuota-amt').value)||0;if(!date||!amt)return;snapshot();const monSel=document.getElementById('new-cuota-moneda');const moneda=monSel?monSel.value:'USD';const num=(deal.cuotas.length?Math.max(...deal.cuotas.map(c=>c.num)):0)+1;deal.cuotas.push({num,date,amt,paid:false,moneda});saveData();openFicha(id);}
 function sendWA(){if(!editingId)return;const deal=deals().find(d=>d.id===editingId);const next=nextUnpaid(deal);let msg=`Hola ${deal.name.split(' ')[0]} 👋, te contacto sobre tu programa *${deal.producto||''}*.`;if(next){const d=dd(next.date);if(d<0)msg+=` Tu cuota #${next.num} de ${fmtMoney(next.amt)} venció hace ${Math.abs(d)} días. ¿Podemos coordinar el pago hoy?`;else msg+=` Tu cuota #${next.num} de ${fmtMoney(next.amt)} vence el ${fmtDate(next.date)}. Avísame si necesitas algo.`;}window.open(`https://wa.me/${deal.phone||''}?text=${encodeURIComponent(msg)}`,'_blank');}
 function saveModal(){
   if(!editingId)return;snapshot();
   const deal=deals().find(d=>d.id===editingId);
-  deal.name=document.getElementById('f-name').value;deal.phone=document.getElementById('f-phone').value;deal.email=document.getElementById('f-email').value;deal.producto=document.getElementById('f-producto').value;deal.valor=parseFloat(document.getElementById('f-valor').value)||0;deal.comision=parseFloat(document.getElementById('f-comision').value)||10;deal.reserva=parseFloat(document.getElementById('f-reserva').value)||0;deal.origen=document.getElementById('f-origen').value;deal.plataforma=document.getElementById('f-plataforma').value;deal.priority=document.getElementById('f-priority').value;deal.stage=document.getElementById('f-stage').value;deal.type=document.getElementById('f-type').value;deal.callDate=document.getElementById('f-calldate').value;deal.callMeet=document.getElementById('f-meet').value.trim();deal.driveLink=document.getElementById('f-drive').value.trim();deal.notas=document.getElementById('f-notas').value;
+  deal.name=document.getElementById('f-name').value;deal.phone=document.getElementById('f-phone').value;deal.email=document.getElementById('f-email').value;deal.producto=document.getElementById('f-producto').value;deal.valor=parseFloat(document.getElementById('f-valor').value)||0;const vMonSel=document.getElementById('f-valor-moneda');deal.valorMoneda=vMonSel?vMonSel.value:'USD';deal.comision=parseFloat(document.getElementById('f-comision').value)||10;deal.reserva=parseFloat(document.getElementById('f-reserva').value)||0;deal.origen=document.getElementById('f-origen').value;deal.plataforma=document.getElementById('f-plataforma').value;deal.priority=document.getElementById('f-priority').value;deal.stage=document.getElementById('f-stage').value;deal.type=document.getElementById('f-type').value;deal.callDate=document.getElementById('f-calldate').value;deal.callMeet=document.getElementById('f-meet').value.trim();deal.driveLink=document.getElementById('f-drive').value.trim();deal.notas=document.getElementById('f-notas').value;
   closeModal();refreshAll();saveData();toast('Guardado ✓');
 }
 function openNewDeal(stage){const nd={id:Date.now(),name:'',phone:'',email:'',stage:stage||'lead',type:'nueva',origen:'',plataforma:'',valor:0,comision:10,reserva:0,callDate:'',callMeet:'',driveLink:'',producto:'',notas:'',priority:'media',cuotas:[],seguimientos:[]};snapshot();deals().push(nd);saveData();openFicha(nd.id);}
@@ -1037,9 +1175,9 @@ function confirmImport(imported){
 // ══════════════════════════════════════════
 function exportCSV(){
   const D=deals();
-  const H=['Nombre','Email','Telefono','Producto','Etapa','Tipo','Origen','Plataforma_Pago','Valor_Total','Comision_Pct','Reserva','Fecha_Call','Google_Meet','Drive_Link','Notas','Prioridad','Num_Cuota','Fecha_Vencimiento','Monto_Cuota','Pagado'];
+  const H=['Nombre','Email','Telefono','Producto','Etapa','Tipo','Origen','Plataforma_Pago','Valor_Total','Moneda_Valor','Comision_Pct','Reserva','Fecha_Call','Google_Meet','Drive_Link','Notas','Prioridad','Num_Cuota','Fecha_Vencimiento','Monto_Cuota','Moneda','Pagado'];
   const rows=[H.join(',')];
-  D.forEach(deal=>{const base=[deal.name,deal.email,deal.phone,`"${deal.producto||''}"`,deal.stage,deal.type,deal.origen||'',deal.plataforma||'',deal.valor,deal.comision,deal.reserva,deal.callDate||'',deal.callMeet||'',deal.driveLink||'',`"${(deal.notas||'').replace(/"/g,"'")}"`,deal.priority];if(!deal.cuotas.length)rows.push([...base,'—','—','—','No'].join(','));else deal.cuotas.forEach(c=>rows.push([...base,c.num,c.date||'',c.amt,c.paid?'Si':'No'].join(',')));});
+  D.forEach(deal=>{const base=[deal.name,deal.email,deal.phone,`"${deal.producto||''}"`,deal.stage,deal.type,deal.origen||'',deal.plataforma||'',deal.valor,deal.comision,deal.reserva,deal.callDate||'',deal.callMeet||'',deal.driveLink||'',`"${(deal.notas||'').replace(/"/g,"'")}"`,deal.priority];if(!deal.cuotas.length)rows.push([...base,'—','—','—','No'].join(','));else deal.cuotas.forEach(c=>rows.push([...base,c.num,c.date||'',c.amt,c.moneda||'USD',c.paid?'Si':'No'].join(',')));});
   const blob=new Blob(['\uFEFF'+rows.join('\n')],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');
   a.href=url;a.download=`CRM_${currentProject}_${new Date().toISOString().slice(0,10)}.csv`;a.click();
