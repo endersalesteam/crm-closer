@@ -791,7 +791,12 @@ function renderDashboard(){
   const rev=D.filter(d=>d.stage==='ganado').reduce((s,d)=>s+d.valor,0);
   const revUSD=D.filter(d=>d.stage==='ganado'&&(d.valorMoneda||'USD')==='USD').reduce((s,d)=>s+d.valor,0);
   const revMXN=D.filter(d=>d.stage==='ganado'&&d.valorMoneda==='MXN').reduce((s,d)=>s+d.valor,0);
-  const com=D.filter(d=>d.stage==='ganado').reduce((s,d)=>s+d.valor*d.comision/100,0);
+  // Comisión = % sobre todo lo efectivamente cobrado (cuotas pagadas + reservas)
+  const com=D.reduce((s,d)=>{
+    const cobradoCuotas=d.cuotas.filter(c=>c.paid).reduce((ss,c)=>ss+c.amt,0);
+    const cobradoReserva=(d.reserva>0&&!d.cuotas.some(c=>c.paid&&c.num===1))?d.reserva:0;
+    return s+(cobradoCuotas+cobradoReserva)*d.comision/100;
+  },0);
   let venc=0;D.forEach(d=>d.cuotas.forEach(c=>{if(!c.paid&&dd(c.date)<0)venc++;}));
   const aov=closed?Math.round(rev/closed):0;
   const aovUSD=D.filter(d=>d.stage==='ganado'&&(!d.valorMoneda||d.valorMoneda==='USD')).length?Math.round(revUSD/D.filter(d=>d.stage==='ganado'&&(!d.valorMoneda||d.valorMoneda==='USD')).length):0;
@@ -892,7 +897,12 @@ function renderCobros(){
   const rResUSD=D.filter(d=>d.reserva>0&&(!d.valorMoneda||d.valorMoneda==='USD')&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
   const rResMXN=D.filter(d=>d.reserva>0&&d.valorMoneda==='MXN'&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
   const cob=(rCobUSD+rResUSD)+(rCobMXN+rResMXN); const pen=rPenUSD+rPenMXN;
-  const com=D.reduce((s,d)=>s+d.cuotas.filter(c=>c.paid).reduce((ss,c)=>ss+c.amt,0)*d.comision/100,0);
+  // Comisión = % sobre cuotas pagadas + reservas no capturadas como cuota
+  const com=D.reduce((s,d)=>{
+    const cobCuotas=d.cuotas.filter(c=>c.paid).reduce((ss,c)=>ss+c.amt,0);
+    const cobRes=(d.reserva>0&&!d.cuotas.some(c=>c.paid&&c.num===1))?d.reserva:0;
+    return s+(cobCuotas+cobRes)*d.comision/100;
+  },0);
   const venc=all.filter(c=>!c.paid&&dd(c.date)<0).length;
   const isChinoCob=currentProject==='chino';
   document.getElementById('cobros-kpis').innerHTML=isChinoCob?`
@@ -1010,7 +1020,8 @@ function initResultCharts(){
   const D=deals();const labels=[],cashData=[],metaData=[],cierreData=[],comData=[];
   for(let i=5;i>=0;i--){let m=currentMonth-i,y=currentYear;if(m<0){m+=12;y--;}labels.push(`${MONTHS_ES[m].slice(0,3)} ${y}`);const k=`${y}-${String(m+1).padStart(2,'0')}`;const allCi=[];D.forEach(d=>d.cuotas.forEach(c=>{const cd=new Date(c.date);if(c.paid&&cd.getMonth()===m&&cd.getFullYear()===y)allCi.push({...c,comision:d.comision});}));
       const loopRes=D.filter(d=>d.reserva>0&&d.callDate&&new Date(d.callDate).getMonth()===m&&new Date(d.callDate).getFullYear()===y&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva,0);
-      cashData.push(allCi.reduce((s,c)=>s+c.amt,0)+loopRes);metaData.push((metas()[k]||{}).cashMeta||0);cierreData.push(D.filter(d=>d.stage==='ganado'&&d.callDate&&new Date(d.callDate).getMonth()===m&&new Date(d.callDate).getFullYear()===y).length);comData.push(allCi.reduce((s,c)=>s+c.amt*c.comision/100,0));}
+      cashData.push(allCi.reduce((s,c)=>s+c.amt,0)+loopRes);metaData.push((metas()[k]||{}).cashMeta||0);cierreData.push(D.filter(d=>d.stage==='ganado'&&d.callDate&&new Date(d.callDate).getMonth()===m&&new Date(d.callDate).getFullYear()===y).length);const loopComRes=D.filter(d=>d.reserva>0&&d.callDate&&new Date(d.callDate).getMonth()===m&&new Date(d.callDate).getFullYear()===y&&!d.cuotas.some(c=>c.paid&&c.num===1)).reduce((s,d)=>s+d.reserva*d.comision/100,0);
+      comData.push(allCi.reduce((s,c)=>s+c.amt*c.comision/100,0)+loopComRes);}
   const origenCnts=ORIGENES.map(o=>D.filter(d=>d.origen===o).length);
   const baseOpts={responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9998A0',font:{family:'Montserrat',size:10}}}},scales:{y:{beginAtZero:true,ticks:{color:'#56555C',font:{family:'Montserrat',size:10}},grid:{color:'rgba(255,255,255,0.04)'}},x:{ticks:{color:'#56555C',font:{family:'Montserrat',size:10}},grid:{display:false}}}};
   new Chart(document.getElementById('cashChart'),{type:'bar',data:{labels,datasets:[{label:'Real',data:cashData,backgroundColor:'rgba(93,203,160,.5)',borderColor:'var(--green)',borderWidth:1.5,borderRadius:5},{label:'Meta',data:metaData,type:'line',borderColor:'rgba(200,240,96,.7)',borderWidth:2,pointRadius:4,tension:.3,fill:false}]},options:{...baseOpts}});
